@@ -1,11 +1,15 @@
 'use strict';
 
+/* jshint maxstatements: 100 */
+
+const async = require('async');
 const crypto = require('crypto');
 const errors = require('storj-service-error-types');
-const expect = require('chai').expect;
+const { expect } = require('chai');
 const mongoose = require('mongoose');
 const sinon = require('sinon');
 const ms = require('ms');
+const validateUUID = require('uuid-validate');
 
 require('mongoose-types').loadTypes(mongoose);
 
@@ -19,15 +23,15 @@ before(function(done) {
     'mongodb://127.0.0.1:27017/__storj-bridge-test',
     function() {
       User = UserSchema(connection);
-      done();
+      User.remove({}, function() {
+        done();
+      });
     }
   );
 });
 
 after(function(done) {
-  User.remove({}, function() {
-    connection.close(done);
-  });
+  connection.close(done);
 });
 
 function sha256(i) {
@@ -46,6 +50,23 @@ describe('Storage/models/User', function() {
       });
     });
 
+    it('should create user with opts object passed in', function(done) {
+      User.create({
+        email: 'user22@domain.tld',
+        password: sha256('password'),
+        referralPartner: '5925ec5eee5642661d4a43a4'
+      }, function(err, user) {
+        if (err) {
+          return done(err);
+        }
+        expect(user.email).to.equal('user22@domain.tld');
+        expect(user.referralPartner.toString())
+          .to.equal('5925ec5eee5642661d4a43a4');
+        expect(user.activated).to.equal(false);
+        done();
+      });
+    });
+
     it('should not create a duplicate user account', function(done) {
       User.create('user@domain.tld', sha256('password'), function(err) {
         expect(err.message).to.equal('Email is already registered');
@@ -53,10 +74,24 @@ describe('Storage/models/User', function() {
       });
     });
 
-    it('should not create a invalid email (no tld)', function(done) {
-      User.create('wrong@domain', sha256('password'), function(err) {
+    it('should not create a invalid email (no domain)', function(done) {
+      User.create('wrong@', sha256('password'), function(err) {
         expect(err).to.be.instanceOf(Error);
-        expect(err.message).to.equal('User validation failed');
+        expect(err.message).to.equal('Invalid email');
+        done();
+      });
+    });
+
+    it('should create a valid UUID', function(done) {
+      User.create('uuid@domain.tld', sha256('password'), function(err, user) {
+        expect(validateUUID(user.uuid)).to.equal(true);
+        done();
+      });
+    });
+
+    it('should add a dnt preference', function(done) {
+      User.create('dnt@domain.tld', sha256('password'), function(err, user) {
+        expect(user.preferences.dnt).to.equal(false);
         done();
       });
     });
@@ -103,13 +138,13 @@ describe('Storage/models/User', function() {
         });
     });
 
-    it('should not create email with invalid symbols', function(done) {
+    it('should not create email with no user', function(done) {
       User.create(
-        'test()test@gmail.com',
+        '@gmail.com',
         sha256('password'),
         function(err) {
           expect(err).to.be.instanceOf(Error);
-          expect(err.message).to.equal('User validation failed');
+          expect(err.message).to.equal('Invalid email');
           done();
         });
     });
@@ -135,15 +170,33 @@ describe('Storage/models/User', function() {
 
       User.create(longEmail, sha256('password'), function(err) {
         expect(err).to.be.instanceOf(Error);
-        expect(err.message).to.equal('User validation failed');
+        expect(err.message).to.equal('Invalid email');
         done();
       });
     });
   });
 
+  describe('#toObject', function() {
 
-  /* jshint ignore: start */
-  /* ignoring: too many statements */
+    it('should contain specified properties + virtuals', function(done) {
+      User.findOne({ _id: 'user@domain.tld' }, function(err, user) {
+        if (err) {
+          return done(err);
+        }
+        const keys = Object.keys(user.toObject());
+        expect(keys).to.contain(
+          'isFreeTier', 'activated', 'created', 'email', 'id', 'uuid'
+        );
+        expect(keys).to.not.contain(
+          '__v', '_id', 'hashpass', 'activator', 'deactivator', 'resetter',
+          'pendingHashPass', 'bytesDownloaded', 'bytesUploaded'
+        );
+        done();
+      });
+    });
+
+  });
+
   describe('#recordDownloadBytes', function() {
     it('should record the bytes and increment existing', function(done) {
       var user = new User({
@@ -176,6 +229,51 @@ describe('Storage/models/User', function() {
       expect(user.bytesDownloaded.lastMonthBytes).to.equal(5000);
       clock.restore();
       done();
+    });
+
+    it('will increment the value with concurrency', function(done) {
+      const email = 'multiprocess2@absentminded.com';
+      const pass = '06b76ad257f1e2f873c40e909392e76793322f7436d755d4896c5af96' +
+            'cb56af4';
+      User.create(email, pass, (err) => {
+        if (err) {
+          return done(err);
+        }
+        async.times(10, (n, next) => {
+          User.findOne({_id: email}, (err, user) => {
+            if (err) {
+              return done(err);
+            }
+            if (!user) {
+              return done(new Error('User not found'));
+            }
+            user.recordDownloadBytes(4096, next);
+          });
+        }, (err) => {
+          if (err) {
+            return done(err);
+          }
+          User.findOne({_id: email}, (err, user2) => {
+            if (err) {
+              return done(err);
+            }
+            if (!user2) {
+              return done(new Error('User not found'));
+            }
+            expect(user2.bytesDownloaded.lastHourBytes).to.equal(4096 * 10);
+            expect(user2.bytesDownloaded.lastDayBytes).to.equal(4096 * 10);
+            expect(user2.bytesDownloaded.lastMonthBytes).to.equal(4096 * 10);
+
+            expect(user2.bytesDownloaded.lastHourStarted)
+              .to.be.below(Date.now());
+            expect(user2.bytesDownloaded.lastDayStarted)
+              .to.be.below(Date.now());
+            expect(user2.bytesDownloaded.lastMonthStarted)
+              .to.be.below(Date.now());
+            done();
+          });
+        });
+      });
     });
   });
 
@@ -230,6 +328,8 @@ describe('Storage/models/User', function() {
   });
 
   describe('#recordUploadBytes', function() {
+    const sandbox = sinon.sandbox.create();
+    afterEach(() => sandbox.restore());
 
     it('should record the bytes and increment existing', function(done) {
       var user = new User({
@@ -264,8 +364,148 @@ describe('Storage/models/User', function() {
       done();
     });
 
+    it('will increment the value with concurrency', function(done) {
+      const email = 'multiprocess@absentminded.com';
+      const pass = '06b76ad257f1e2f873c40e909392e76793322f7436d755d4896c5af96' +
+            'cb56af4';
+      User.create(email, pass, (err) => {
+        if (err) {
+          return done(err);
+        }
+        async.times(10, (n, next) => {
+          User.findOne({_id: email}, (err, user) => {
+            if (err) {
+              return done(err);
+            }
+            if (!user) {
+              return done(new Error('User not found'));
+            }
+            user.recordUploadBytes(4096, next);
+          });
+        }, (err) => {
+          if (err) {
+            return done(err);
+          }
+          User.findOne({_id: email}, (err, user2) => {
+            if (err) {
+              return done(err);
+            }
+            if (!user2) {
+              return done(new Error('User not found'));
+            }
+            expect(user2.bytesUploaded.lastHourBytes).to.equal(4096 * 10);
+            expect(user2.bytesUploaded.lastDayBytes).to.equal(4096 * 10);
+            expect(user2.bytesUploaded.lastMonthBytes).to.equal(4096 * 10);
+
+            expect(user2.bytesUploaded.lastHourStarted)
+              .to.be.below(Date.now());
+            expect(user2.bytesUploaded.lastDayStarted)
+              .to.be.below(Date.now());
+            expect(user2.bytesUploaded.lastMonthStarted)
+              .to.be.below(Date.now());
+            done();
+          });
+        });
+      });
+    });
+
+    it('will reset the bytes to zero', function(done) {
+      const email = 'increment@absentminded.com';
+      var clock = sandbox.useFakeTimers();
+      User.create(email, sha256('hashpass'), (err, user) => {
+        if (err) {
+          return done(err);
+        }
+        user.recordUploadBytes(4096, (err) => {
+          if (err) {
+            return done(err);
+          }
+          User.findOne({_id: email}, (err, user) => {
+            if (err) {
+              return done(err);
+            }
+            expect(user.bytesUploaded.lastHourBytes).to.equal(4096);
+            expect(user.bytesUploaded.lastDayBytes).to.equal(4096);
+            expect(user.bytesUploaded.lastMonthBytes).to.equal(4096);
+
+            expect(user.isUploadRateLimited(1000, 8000, 16000)).to.equal(true);
+            expect(user.isUploadRateLimited(8000, 1000, 16000)).to.equal(true);
+            expect(user.isUploadRateLimited(8000, 8000, 1000)).to.equal(true);
+
+            clock.tick(ms('2h'));
+
+            expect(user.isUploadRateLimited(1000, 8000, 16000)).to.equal(false);
+            expect(user.isUploadRateLimited(8000, 1000, 16000)).to.equal(true);
+            expect(user.isUploadRateLimited(8000, 8000, 1000)).to.equal(true);
+
+            async.series([
+              function(next) {
+                user.recordUploadBytes(1, (err) => {
+                  if (err) {
+                    return next(err);
+                  }
+
+                  User.findOne({_id: email}, (err, user) => {
+                    if (err) {
+                      return next(err);
+                    }
+                    expect(user.bytesUploaded.lastHourBytes).to.equal(1);
+                    expect(user.bytesUploaded.lastDayBytes).to.equal(4097);
+                    expect(user.bytesUploaded.lastMonthBytes).to.equal(4097);
+                    next();
+                  });
+                });
+              },
+              function(next) {
+                clock.tick(ms('24h'));
+
+                expect(user.isUploadRateLimited(1000, 1000, 16000))
+                  .to.equal(false);
+
+                user.recordUploadBytes(1, (err) => {
+                  if (err) {
+                    return next(err);
+                  }
+
+                  User.findOne({_id: email}, (err, user) => {
+                    if (err) {
+                      return next(err);
+                    }
+                    expect(user.bytesUploaded.lastHourBytes).to.equal(1);
+                    expect(user.bytesUploaded.lastDayBytes).to.equal(1);
+                    expect(user.bytesUploaded.lastMonthBytes).to.equal(4098);
+                    next();
+                  });
+                });
+              },
+              function(next) {
+                clock.tick(ms('30d'));
+
+                expect(user.isUploadRateLimited(1000, 1000, 1000))
+                  .to.equal(false);
+
+                user.recordUploadBytes(1, (err) => {
+                  if (err) {
+                    return next(err);
+                  }
+
+                  User.findOne({_id: email}, (err, user) => {
+                    if (err) {
+                      return next(err);
+                    }
+                    expect(user.bytesUploaded.lastHourBytes).to.equal(1);
+                    expect(user.bytesUploaded.lastDayBytes).to.equal(1);
+                    expect(user.bytesUploaded.lastMonthBytes).to.equal(1);
+                    next();
+                  });
+                });
+              }
+            ], done);
+          });
+        });
+      });
+    });
   });
-  /* jshint ignore: end */
 
   describe('#isUploadRateLimited', function() {
 
@@ -354,6 +594,13 @@ describe('Storage/models/User', function() {
       User.lookup('user@domain.tld', sha256('password'), function(err, user) {
         expect(err).to.not.be.instanceOf(Error);
         expect(user.id).to.equal('user@domain.tld');
+        done();
+      });
+    });
+
+    it('should give error if missing passwd', function(done) {
+      User.lookup('user@domain.tld', null, function(err) {
+        expect(err).to.be.instanceOf(errors.NotAuthorizedError);
         done();
       });
     });

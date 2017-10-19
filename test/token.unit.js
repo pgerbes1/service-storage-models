@@ -18,17 +18,17 @@ before(function(done) {
     function() {
       Token = TokenSchema(connection);
       Bucket = BucketSchema(connection);
-      done();
+      Token.remove({}, function() {
+        Bucket.remove({}, function() {
+          done();
+        });
+      });
     }
   );
 });
 
 after(function(done) {
-  Token.remove({}, function() {
-    Bucket.remove({}, function() {
-      connection.close(done);
-    });
-  });
+  connection.close(done);
 });
 
 describe('Storage/models/Token', function() {
@@ -49,7 +49,7 @@ describe('Storage/models/Token', function() {
     it('should not create the token for invalid operation', function(done) {
       Bucket.create({ _id: 'user@domain.tld' }, {}, function(err, bucket) {
         Token.create(bucket, 'Push', function(err) {
-          expect(err.message).to.equal('Token validation failed');
+          expect(err.message).to.match(/^token validation failed.*/i);
           done();
         });
       });
@@ -76,6 +76,22 @@ describe('Storage/models/Token', function() {
             expect(token.token).to.equal(result.token);
             done();
           });
+        });
+      });
+    });
+
+  });
+
+  describe('#toObject', function() {
+
+    it('should contain specified properties + virtuals', function(done) {
+      Bucket.create({ _id: 'user@domain.tld' }, {}, function(err, bucket) {
+        Token.create(bucket, 'PUSH', function(err, token) {
+          expect(err).to.not.be.instanceOf(Error);
+          const keys = Object.keys(token.toObject());
+          expect(keys).to.not.contain('__v', '_id');
+          expect(keys).to.contain('token');
+          done();
         });
       });
     });

@@ -12,15 +12,15 @@ before((done) => {
     'mongodb://127.0.0.1:27017/__storj-bridge-test',
     () => {
       auditModel = FullAudit(connection);
-      done();
+      auditModel.remove({}, () => {
+        done();
+      });
     }
   );
 });
 
 after((done) => {
-  auditModel.remove({}, () => {
-    connection.close(done);
-  });
+  connection.close(done);
 });
 
 describe('FullAudit', function() {
@@ -36,7 +36,8 @@ describe('FullAudit', function() {
     challenges: ['test', 'test', 'test']
   };
 
-  describe('scheduleFullAudits', function() {
+  describe('#scheduleFullAudits', function() {
+
     it('should create a schedule of audits', (done) => {
       auditModel.scheduleFullAudits(
         fakeAuditScheduleObj,
@@ -50,9 +51,8 @@ describe('FullAudit', function() {
     });
 
     it('should not schedule audits with missing properties', (done) => {
-      auditModel.scheduleFullAudits({challenges:[]},
-        null,
-        (err, docsArr) => {
+      auditModel.scheduleFullAudits({challenges:[{}]},
+        null, (err, docsArr) => {
           expect(err).to.not.be.a('null');
           expect(docsArr).to.be.an('undefined');
           done();
@@ -72,9 +72,11 @@ describe('FullAudit', function() {
         }
       );
     });
+
   });
 
-  describe('defaultScheduleTransform', function() {
+  describe('#defaultScheduleTransform', function() {
+
     it('should schedule audits at an evenly distributed, rounded, interval',
       () => {
       expect(auditModel.defaultScheduleTransform({
@@ -95,9 +97,11 @@ describe('FullAudit', function() {
         challenges: [0,1,2]
       }, 2)).to.equal(9);
     });
+
   });
 
-  describe('popReadyAudits', function() {
+  describe('#popReadyAudits', function() {
+
     it('should return a cursor of all audits with expired timestamps',
       (done) => {
       var docs = [];
@@ -113,9 +117,11 @@ describe('FullAudit', function() {
         });
       }, 1500);
     });
+
   });
 
-  describe('handleAuditResult', function() {
+  describe('#handleAuditResult', function() {
+
     it('should update an audit record with its result', (done) => {
       auditModel.handleAuditResult(returnedFakeAuditsDoc[0]._id, false, () => {
         auditModel.findById(returnedFakeAuditsDoc[0]._id, (err, doc) => {
@@ -124,5 +130,7 @@ describe('FullAudit', function() {
         });
       });
     });
+
   });
+
 });

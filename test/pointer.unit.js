@@ -15,15 +15,15 @@ before(function(done) {
     'mongodb://127.0.0.1:27017/__storj-bridge-test',
     function() {
       Pointer = PointerSchema(connection);
-      done();
+      Pointer.remove({}, function() {
+        done();
+      });
     }
   );
 });
 
 after(function(done) {
-  Pointer.remove({}, function() {
-    connection.close(done);
-  });
+  connection.close(done);
 });
 
 describe('Storage/models/Pointer', function() {
@@ -36,7 +36,8 @@ describe('Storage/models/Pointer', function() {
         hash: 'fjla93fs9-23892-2sdl@#ds-932049203',
         size: 1,
         tree: ['tree1', 'tree2'],
-        challenges: ['challenge1', 'challenge2']
+        challenges: ['challenge1', 'challenge2'],
+        parity: true
       };
       Pointer.create(shard, function(err, pointer) {
         expect(err).to.not.be.an.instanceOf(Error);
@@ -47,7 +48,46 @@ describe('Storage/models/Pointer', function() {
         expect(pointer.size).to.equal(shard.size);
         expect(pointer.size).to.be.a('number');
         expect(pointer.tree).to.be.an('array');
+        expect(pointer.parity).to.equal(true);
         expect(pointer.challenges).to.be.an('array');
+        done();
+      });
+    });
+
+  });
+
+  describe('#_validate', function() {
+
+    it('will throw hash message if missing hash', function() {
+      var shard = {
+        index: 1,
+        size: 1,
+        tree: ['tree1', 'tree2'],
+        challenges: ['challenge1', 'challenge2']
+      };
+      Pointer.create(shard, function(err) {
+        expect(err).to.be.instanceOf(Error);
+        expect(err.message).to.match(/^Hash is expected/);
+      });
+    });
+
+  });
+
+  describe('#toObject', function() {
+
+    it('should contain specified properties', function(done) {
+      var shard = {
+        index: 1,
+        hash: 'fjla93fs9-23892-2sdl@#ds-932049203',
+        size: 1,
+        tree: ['tree1', 'tree2'],
+        challenges: ['challenge1', 'challenge2']
+      };
+      Pointer.create(shard, function(err, pointer) {
+        expect(err).to.not.be.an.instanceOf(Error);
+        const keys = Object.keys(pointer.toObject());
+        expect(keys).to.not.contain('__v', '_id');
+        expect(keys).to.contain('id');
         done();
       });
     });

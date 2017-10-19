@@ -16,15 +16,15 @@ before(function(done) {
     'mongodb://127.0.0.1:27017/__storj-bridge-test',
     function() {
       PublicKey = PublicKeySchema(connection);
-      done();
+      PublicKey.remove({}, function() {
+        done();
+      });
     }
   );
 });
 
 after(function(done) {
-  PublicKey.remove({}, function() {
-    connection.close(done);
-  });
+  connection.close(done);
 });
 
 describe('Storage/models/PublicKey', function() {
@@ -38,6 +38,26 @@ describe('Storage/models/PublicKey', function() {
       expect(err).to.not.be.instanceOf(Error);
       expect(pubkey._id).to.equal(publicKey);
       done();
+    });
+  });
+
+  it('should create the public with spam resistent email', function(done) {
+
+    var publicKey2 = storj.KeyPair().getPublicKey();
+
+    PublicKey.create({
+      _id: 'user+nospam@domain.tld'
+    }, publicKey2, function(err, pubkey) {
+      if (err) {
+        return done(err);
+      }
+      pubkey.save((err) => {
+        if (err) {
+          return done(err);
+        }
+        expect(pubkey._id).to.equal(publicKey2);
+        done();
+      });
     });
   });
 
@@ -87,6 +107,23 @@ describe('Storage/models/PublicKey', function() {
       );
       done();
     });
+  });
+
+  describe('#toObject', function() {
+
+    it('should contain specified properties + virtuals', function(done) {
+      var publicKey = storj.KeyPair().getPublicKey();
+      PublicKey.create({
+        _id: 'user@domain.tld'
+      }, publicKey, function(err, pubkey) {
+        expect(err).to.not.be.instanceOf(Error);
+        const keys = Object.keys(pubkey.toObject());
+        expect(keys).to.not.contain('__v', '_id');
+        expect(keys).to.contain('key');
+        done();
+      });
+    });
+
   });
 
 });
